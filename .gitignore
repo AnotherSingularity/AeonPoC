@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+
+# Checkpoints / data artifacts
+aeon_init/
+aeon_stage1/
+aeon_stage2/
+*.jsonl
+*.safetensors
+*.bin
+
+# Env
+.venv/
+venv/

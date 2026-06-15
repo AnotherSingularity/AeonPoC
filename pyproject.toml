@@ -1,0 +1,25 @@
+[project]
+name = "aeon"
+version = "0.1.0"
+description = "A small, efficient language model with a contractive recurrent path."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "transformers>=4.43,<4.47",
+    "accelerate",
+    "huggingface_hub",
+    "numpy",
+    "safetensors",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "psutil"]
+data = ["datasets"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aeon*"]
