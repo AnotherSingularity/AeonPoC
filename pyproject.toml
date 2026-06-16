@@ -4,8 +4,12 @@ version = "0.1.0"
 description = "A small, efficient language model."
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.1",
-    "transformers>=4.43,<4.47",
+    # Pinned to a known-good stack. torch 2.11/2.12 + cu130 has a baseline-memory
+    # regression that OOMs 24 GB consumer cards (3090/4090) before the first
+    # forward. Install torch from the cu124 index (see README / docs/ENVIRONMENT.md):
+    #   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+    "torch==2.5.1",
+    "transformers==4.46.3",
     "accelerate",
     "huggingface_hub",
     "numpy",
