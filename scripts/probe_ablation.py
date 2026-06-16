@@ -73,7 +73,7 @@ def main():
         print("WARNING: gates are ~zero. The recursion path is inert regardless of the\n"
               "         enable/disable flag, so ON and OFF WILL be identical. If this\n"
               "         checkpoint was trained to nonzero gates, they did not survive\n"
-              "         reload -- see docs/STAGE1_REPORT.md ('gamma serialization').")
+              "         reload -- see docs/STAGE1_REPORT.md ('gate serialization').")
     print("=" * 78)
 
     n_diff = 0
