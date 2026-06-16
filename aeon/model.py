@@ -207,6 +207,18 @@ class AeonModel(AeonPreTrainedModel):
         # Within a chunk, attention is batched over the chunk's tokens (causal,
         # attending to the threaded cache). The recurrent state advances once per
         # token *after* the chunk's full block stack, via a small sequential scan.
+        #
+        # WHY TRAINING DEFAULTS TO K=1 (not a perf bug): with a single chunk
+        # (K = T) the recurrent read sees only the chunk-start state and the
+        # advanced state is never read back within this forward. So in a
+        # single-forward training pass the recurrent parameters (cell, U, D_proj,
+        # recursion_gate) receive NO gradient — measured directly: K=T -> grad
+        # None, K=1 -> grad flows. K=T is therefore a fast *inference* default
+        # (generation decode steps are single-token, so the recursion is live
+        # token-to-token there); *training* must use K < seq_len so later chunks
+        # read earlier chunks' state. The training scripts default to K=1 (exact
+        # v1 semantics) and warn otherwise. Intermediate K trades training
+        # fidelity for throughput and must be behavior-validated per K.
         chunk = self.config.recursion_chunk_size
         K = T if (not chunk or chunk <= 0 or chunk >= T) else chunk
 

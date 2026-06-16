@@ -140,3 +140,38 @@ document the exact commands and the quantities to compare.
 ---
 
 End of brief.
+
+---
+
+## Addendum — what was delivered (2026-06-16, design approved)
+
+Implemented as **chunked-batch with config knob `recursion_chunk_size` (K)**:
+`0` (default) = K=T fully batched; `1` = exact per-token (byte-identical to v1);
+`k` = chunks of k. K is exposed precisely so the speed-vs-fidelity tradeoff at
+intermediate K can be characterized later.
+
+**Key empirical finding (the §2 risk, made concrete).** At **K=T the recurrent
+path gets zero gradient in a single-forward training pass** — the one chunk reads
+only the chunk-start (initial) state and never reads the advanced state back,
+so cell/U/D/`recursion_gate` are disconnected from the loss. Measured directly:
+K=T -> `A_h.grad = None`; K=1 -> `A_h.grad = 7.8e-2`. Caught by gradient
+measurement, which is what the STOP condition was written for.
+
+**Resolution (no STOP needed — chunked-K was pre-approved).**
+- K=T stays the **inference** default (generation decode steps are single-token,
+  so the recursion is live token-to-token during decode; the win is batched
+  prefill).
+- **Training** must use K < seq_len; `train_stage1.py` / `train_stage2.py`
+  default to **K=1** (exact v1 semantics) and warn if K would be a single chunk.
+- The risky fully-batched/`K>1` *training* regime is therefore opt-in, not the
+  default — Stage 1 re-training at K=1 is the v1 architecture exactly.
+
+**Speed.** Inference speedup is real (batched prefill); on a tiny CPU model the
+prefill-dominated bench showed K=T ~6.5x faster than K=1. **Training speedup is
+NOT delivered by K=T** (it can't train); a real training speedup requires
+chunked `K>1`, which trades fidelity and must be behavior-validated per K.
+
+**Gate 3 instruction.** Run the Stage 1 parity re-train at
+`--recursion_chunk_size 1`. Do NOT run it at the K=T default — it will show the
+gate frozen (no gradient), which is expected, not a regression.
+

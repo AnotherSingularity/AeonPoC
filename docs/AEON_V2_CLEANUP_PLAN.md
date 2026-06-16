@@ -161,6 +161,25 @@ This is a real semantic change. It needs validation that the Stage 1 results sti
 
 **Critical caveat:** This may not work cleanly. The per-token loop was a deliberate design choice to let recursion state modulate attention. If batching breaks that and degrades the architecture meaningfully, this layer needs a different approach (e.g., chunked-batch where recursion state advances every K tokens, K being a tunable parameter that trades speed for expressiveness).
 
+> **DELIVERED (2026-06-16) — corrects the optimism above.** Implemented as the
+> chunked-batch fallback: config knob `recursion_chunk_size` (K). `0` (default) =
+> K=T fully batched; `1` = exact per-token (byte-identical to v1); `k` = chunks
+> of k. Outcome:
+> - **Inference speedup: yes.** Batched prefill (and batched eval) is the win;
+>   decode steps are single-token regardless. gamma=0 byte-identity preserved
+>   (~1.1e-6 fp32) and K-invariant.
+> - **Training speedup: NO (the plan was over-optimistic).** At K=T the recurrent
+>   path gets *zero gradient* in a single-forward pass — the lone chunk reads
+>   only the initial state and never reads the advanced state back, so the
+>   recursion parameters are disconnected from the loss (measured: K=T grad None,
+>   K=1 grad flows). K=T is a fast *inference* default (decode is single-token, so
+>   the recursion is live during generation); **training must use K < seq_len**,
+>   and the training scripts default to K=1 (exact v1) with a warning otherwise.
+> - **K is exposed** precisely so the speed-vs-fidelity tradeoff at intermediate
+>   K can be explored later; any K>1 training regime needs per-K behavior
+>   validation. See `docs/LAYER3_BRIEF.md` (addendum) and the comment in
+>   `aeon/model.py` where K is consumed.
+
 ---
 
 ### Layer 4 — Training and Inference Infrastructure
