@@ -32,6 +32,10 @@ out = model.generate(**ids, max_new_tokens=64)
 print(tok.decode(out[0], skip_special_tokens=True))
 ```
 
+No checkpoint yet? `python examples/quickstart.py` runs end-to-end on CPU with a
+tiny synthetic model to confirm the install. Training is config-driven:
+`python scripts/train.py --config configs/stage1.yaml` (see `configs/`).
+
 ## Tests
 
 ```bash

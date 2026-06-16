@@ -55,6 +55,7 @@ def test_two_lr_optimizer_groups():
 
 def test_finetune_example_runs():
     # end-to-end smoke of examples/finetune.py (CPU, synthetic)
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "examples", "finetune.py")
-    runpy.run_path(path, run_name="__main__")
+    root = os.path.dirname(os.path.abspath(__file__))
+    while not os.path.isdir(os.path.join(root, "examples")) and os.path.dirname(root) != root:
+        root = os.path.dirname(root)
+    runpy.run_path(os.path.join(root, "examples", "finetune.py"), run_name="__main__")
