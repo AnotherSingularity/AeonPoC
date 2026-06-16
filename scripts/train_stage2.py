@@ -73,6 +73,8 @@ def main():
                     help="LR for the unfrozen R1 backbone (much lower)")
     ap.add_argument("--audit_every", type=int, default=50)
     ap.add_argument("--save_every", type=int, default=500)
+    ap.add_argument("--recursion_chunk_size", type=int, default=1,
+                    help="K for the chunked forward; training needs K<seq_len (1 = exact).")
     args, _ = ap.parse_known_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -80,6 +82,11 @@ def main():
     model = AeonForCausalLM.from_pretrained(
         args.init, torch_dtype=torch.bfloat16).to(device)
     tok = AutoTokenizer.from_pretrained(args.init)
+
+    model.config.recursion_chunk_size = args.recursion_chunk_size
+    if args.recursion_chunk_size == 0 or args.recursion_chunk_size >= args.seq_len:
+        print(f"WARNING: recursion_chunk_size={args.recursion_chunk_size} is a single "
+              f"chunk; the recurrent path will NOT train. Use a smaller K (1 = exact).")
 
     # Stage 2: everything trains, but in two LR groups.
     for p in model.parameters():

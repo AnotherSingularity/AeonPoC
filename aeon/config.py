@@ -13,6 +13,7 @@ class AeonConfig(Qwen2Config):
         recursion_init_learnable: bool = False,
         recursion_input_std: float = 0.01,
         recursion_output_std: float = 0.01,
+        recursion_chunk_size: int = 0,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -22,3 +23,10 @@ class AeonConfig(Qwen2Config):
         self.recursion_init_learnable = recursion_init_learnable
         self.recursion_input_std = recursion_input_std
         self.recursion_output_std = recursion_output_std
+        # Chunk size K for the batched forward (Layer 3):
+        #   0 (default) -> K = T, fully batched (one batched attention pass).
+        #   1           -> per-token, identical semantics to the v1 loop.
+        #   k           -> chunks of k tokens: batched attention within a chunk
+        #                  with the recurrent read held fixed at the chunk-start
+        #                  state, state advanced once per chunk.
+        self.recursion_chunk_size = recursion_chunk_size

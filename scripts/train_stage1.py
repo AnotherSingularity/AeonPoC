@@ -62,6 +62,11 @@ def main():
     ap.add_argument("--batch_size", type=int, default=2)
     ap.add_argument("--seq_len", type=int, default=512)
     ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--recursion_chunk_size", type=int, default=1,
+                    help="K for the chunked forward. Training needs K<seq_len so the "
+                         "recurrent path is in the gradient graph; K=1 is exact "
+                         "(v1) per-token. K=0/>=seq_len (fully batched) does NOT "
+                         "train the recursion.")
     ap.add_argument("--audit_every", type=int, default=50)
     ap.add_argument("--save_every", type=int, default=500)
     args, _ = ap.parse_known_args()
@@ -71,6 +76,18 @@ def main():
     model = AeonForCausalLM.from_pretrained(
         args.init, torch_dtype=torch.bfloat16).to(device)
     tok = AutoTokenizer.from_pretrained(args.init)
+
+    # Chunked forward (Layer 3). Training requires within-sequence coupling, so
+    # the recurrent state must be read back during the forward -> K < seq_len.
+    model.config.recursion_chunk_size = args.recursion_chunk_size
+    K = args.recursion_chunk_size
+    if K == 0 or K >= args.seq_len:
+        print(f"WARNING: recursion_chunk_size={K} with seq_len={args.seq_len} is a "
+              f"single chunk per sequence; the recurrent path gets NO gradient and "
+              f"will NOT train. Use a smaller K (1 = exact per-token).")
+    else:
+        print(f"recursion_chunk_size (K) = {K}")
+
     freeze_r1_parts(model)
     model.train()
 

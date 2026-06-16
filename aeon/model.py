@@ -40,6 +40,30 @@ from .cache import AeonCache
 from .recursion import RecursionChartB, audit_certificates
 
 
+def _build_chunk_mask(q_abs, kv_len, attention_mask, dtype, device):
+    """Additive (B, 1, K, kv_len) attention mask for a chunk of K query tokens.
+
+    Encodes causality (query at absolute position p attends to key positions
+    <= p) and key padding. Returns None when no masking is needed (a single
+    query with no padding is trivially causal — the K=1 / per-token path).
+    """
+    K = q_abs.shape[0]
+    has_pad = attention_mask is not None and (attention_mask == 0).any()
+    if K == 1 and not has_pad:
+        return None
+    min_val = torch.finfo(dtype).min
+    key_pos = torch.arange(kv_len, device=device)
+    allowed = key_pos[None, :] <= q_abs[:, None]          # (K, kv_len) bool
+    mask = torch.zeros(K, kv_len, dtype=dtype, device=device)
+    mask = mask.masked_fill(~allowed, min_val)
+    B = attention_mask.shape[0] if attention_mask is not None else 1
+    mask = mask[None, None].expand(B, 1, K, kv_len).clone()
+    if has_pad and attention_mask.shape[-1] >= kv_len:
+        pad = attention_mask[:, :kv_len] == 0                # (B, kv_len)
+        mask = mask.masked_fill(pad[:, None, None, :], min_val)
+    return mask
+
+
 class AeonPreTrainedModel(PreTrainedModel):
     config_class = AeonConfig
     base_model_prefix = "model"
@@ -173,51 +197,58 @@ class AeonModel(AeonPreTrainedModel):
             position_ids = cache_position.unsqueeze(0)
 
         cos, sin = self.rotary_emb(hidden_states, position_ids)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(device)
 
-        # Additive key-padding mask, built once over the full KV length.
-        # Causality needs no mask: in left-to-right processing the cache only
-        # holds keys at positions <= the current query, so attending to all
-        # cached keys IS causal. We only mask padded keys; for unpadded inputs
-        # this is None.
-        add_mask = None
-        if attention_mask is not None and (attention_mask == 0).any():
-            min_val = torch.finfo(hidden_states.dtype).min
-            am = attention_mask.to(device)
-            add_mask = torch.zeros(B, 1, 1, am.shape[-1],
-                                   dtype=hidden_states.dtype, device=device)
-            add_mask = add_mask.masked_fill(am[:, None, None, :] == 0, min_val)
+        # Chunked-batch forward (Layer 3). K = chunk size:
+        #   K = T  -> fully batched (default); the recurrent read for every token
+        #             in the chunk is the chunk-start state (broadcast).
+        #   K = 1  -> per-token, identical to the v1 loop.
+        # Within a chunk, attention is batched over the chunk's tokens (causal,
+        # attending to the threaded cache). The recurrent state advances once per
+        # token *after* the chunk's full block stack, via a small sequential scan.
+        chunk = self.config.recursion_chunk_size
+        K = T if (not chunk or chunk <= 0 or chunk >= T) else chunk
 
         outputs_hidden = []
         n_layers = len(self.layers)
-        for t in range(T):
-            h_t = hidden_states[:, t:t + 1, :]
-            pe_t = (cos[:, t:t + 1], sin[:, t:t + 1])
-            cp_t = cache_position[t:t + 1]
-            pid_t = position_ids[:, t:t + 1]
-            kv_len = past_seen + t + 1
-            mask_t = add_mask[:, :, :, :kv_len] if add_mask is not None else None
+        pos = 0
+        while pos < T:
+            end = min(pos + K, T)
+            kc = end - pos                                   # tokens in this chunk
+            h_chunk = hidden_states[:, pos:end, :]           # (B, kc, D)
+            pe_chunk = (cos[:, pos:end], sin[:, pos:end])
+            cp_chunk = cache_position[pos:end]
+            pid_chunk = position_ids[:, pos:end]
+            kv_len = past_seen + end
+            mask_chunk = _build_chunk_mask(cp_chunk, kv_len, attention_mask,
+                                           hidden_states.dtype, device)
 
-            W_sum = torch.zeros(B, self.config.h_rec, device=device, dtype=h_t.dtype)
+            r_chunk = r if self.recursion_enabled else torch.zeros_like(r)
+            W_sum = torch.zeros(B, kc, self.config.h_rec, device=device, dtype=h_chunk.dtype)
 
             for block in self.layers:
                 block_out = block(
-                    h_t,
-                    r_t=r if self.recursion_enabled else torch.zeros_like(r),
-                    attention_mask=mask_t,
-                    position_ids=pid_t,
+                    h_chunk,
+                    r_t=r_chunk,                              # constant across the chunk
+                    attention_mask=mask_chunk,
+                    position_ids=pid_chunk,
                     past_key_value=past_key_values,
                     use_cache=True,
-                    cache_position=cp_t,
-                    position_embeddings=pe_t,
+                    cache_position=cp_chunk,
+                    position_embeddings=pe_chunk,
                 )
-                h_t, w_l = block_out[0], block_out[1]
-                W_sum = W_sum + w_l[:, 0, :]
+                h_chunk, w_l = block_out[0], block_out[1]     # w_l (B, kc, H_rec)
+                W_sum = W_sum + w_l
+
+            outputs_hidden.append(h_chunk)
 
             if self.recursion_enabled:
-                W_total = W_sum / n_layers
-                r, c = self.recursion.step(W_total, r, c)
+                W_total = W_sum / n_layers                    # (B, kc, H_rec)
+                for j in range(kc):
+                    r, c = self.recursion.step(W_total[:, j, :], r, c)
 
-            outputs_hidden.append(h_t)
+            pos = end
 
         hidden_states = torch.cat(outputs_hidden, dim=1)
         hidden_states = self.norm(hidden_states)

@@ -48,6 +48,7 @@ def test_generate_greedy():
 
 def test_recursion_gradients_flow():
     cfg = _tiny_config()
+    cfg.recursion_chunk_size = 1   # training regime: within-sequence coupling
     model = AeonForCausalLM(cfg).train()
     with torch.no_grad():
         for blk in model.model.layers:

@@ -40,6 +40,7 @@ def test_forward_shapes():
 
 def test_recursion_gradients_flow():
     cfg, model = _tiny_model()
+    model.config.recursion_chunk_size = 1   # training regime: within-sequence coupling
     model.train()
     # lift the gate off zero so the recursion read contributes to the loss
     with torch.no_grad():
