@@ -31,7 +31,7 @@ def freeze_r1_parts(model: AeonR1ForCausalLM):
             "recursion." in name
             or name.endswith(".U.weight")
             or name.endswith(".D_proj.weight")
-            or name.endswith(".gamma")
+            or name.endswith(".recursion_gate")
             or "r_init" in name
             or "c_init" in name
         )
@@ -102,10 +102,10 @@ def main():
             opt.step()
 
             if step % 10 == 0:
-                gammas = [model.model.layers[l].gamma.item()
-                          for l in range(len(model.model.layers))]
+                gates = [model.model.layers[l].recursion_gate.item()
+                         for l in range(len(model.model.layers))]
                 print(f"step {step:6d}  loss {loss.item():.4f}  "
-                      f"mean|g|={sum(abs(g) for g in gammas)/len(gammas):.4f}")
+                      f"mean|g|={sum(abs(g) for g in gates)/len(gates):.4f}")
             if step % args.audit_every == 0:
                 a = audit_certificates(model.model.recursion)
                 print(f"  audit: sigma(Wh)={a['chart_A_sigma_Wh']:.4f}  "

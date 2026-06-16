@@ -58,9 +58,9 @@ def main():
     print("porting weights ...")
     port_weights(r1, aeon)
 
-    # Verify gamma is exactly zero everywhere
+    # Verify the per-block gate is exactly zero everywhere
     for l, blk in enumerate(aeon.model.layers):
-        assert blk.gamma.item() == 0.0, f"gamma at layer {l} is not zero"
+        assert blk.recursion_gate.item() == 0.0, f"gate at layer {l} is not zero"
 
     os.makedirs(args.out, exist_ok=True)
     aeon.save_pretrained(args.out)

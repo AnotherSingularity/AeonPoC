@@ -25,7 +25,7 @@ def _check(tie):
     aeon.disable_recursion()
 
     for blk in aeon.model.layers:
-        assert blk.gamma.item() == 0.0
+        assert blk.recursion_gate.item() == 0.0
 
     worst = 0.0
     torch.manual_seed(123)

@@ -70,9 +70,9 @@ def main():
         port_weights(vanilla, aeon)
         aeon.disable_recursion()
 
-        # gamma must be exactly zero
+        # gate must be exactly zero
         for blk in aeon.model.layers:
-            assert blk.gamma.item() == 0.0
+            assert blk.recursion_gate.item() == 0.0
 
         worst = 0.0
         torch.manual_seed(123)

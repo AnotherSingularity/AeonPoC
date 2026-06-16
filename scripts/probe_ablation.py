@@ -13,9 +13,9 @@ Usage:
     python scripts/probe_ablation.py --ckpt ./aeon_stage1
 
 NOTE: this is the first thing in the pipeline that *reloads* trained per-block
-gates. If mean|gamma| prints ~0 here, the gates did not survive the
-save/load round-trip (see docs/STAGE1_REPORT.md, "gamma serialization"), and
-ON/OFF will be identical for a reason that has nothing to do with the model.
+gates. If mean|recursion_gate| prints ~0 here on a pre-rename checkpoint, the
+gates did not survive the save/load round-trip (see docs/STAGE1_REPORT.md,
+"gate serialization"); run scripts/fix_gate_keys.py on the checkpoint first.
 """
 import os, sys, argparse
 import torch
@@ -63,13 +63,13 @@ def main():
     tok = AutoTokenizer.from_pretrained(args.ckpt)
 
     # --- gate / certificate readout (did the trained recursion actually load?) ---
-    gammas = [blk.gamma.item() for blk in model.model.layers]
-    mean_abs_gamma = sum(abs(g) for g in gammas) / len(gammas)
+    gates = [blk.recursion_gate.item() for blk in model.model.layers]
+    mean_abs_gate = sum(abs(g) for g in gates) / len(gates)
     aud = audit_certificates(model.model.recursion)
-    print(f"\nmean|gamma| across {len(gammas)} blocks: {mean_abs_gamma:.4f}")
+    print(f"\nmean|recursion_gate| across {len(gates)} blocks: {mean_abs_gate:.4f}")
     print(f"sigma(Wh)={aud['chart_A_sigma_Wh']:.4f}  sigma(Wc)={aud['chart_A_sigma_Wc']:.4f}  "
           f"certificate_holds={aud['chart_A_holds']}")
-    if mean_abs_gamma < 1e-6:
+    if mean_abs_gate < 1e-6:
         print("WARNING: gates are ~zero. The recursion path is inert regardless of the\n"
               "         enable/disable flag, so ON and OFF WILL be identical. If this\n"
               "         checkpoint was trained to nonzero gates, they did not survive\n"

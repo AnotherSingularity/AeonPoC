@@ -42,8 +42,12 @@ class AeonBlock(nn.Module):
         self.D_proj = nn.Linear(self.D, self.H_rec, bias=False)
         nn.init.normal_(self.D_proj.weight, std=config.recursion_input_std)
 
-        # Per-block gate, exactly zero at init.
-        self.gamma = nn.Parameter(torch.zeros(1))
+        # Per-block gate gamma_l, exactly zero at init.
+        # Named `recursion_gate`, not `gamma`: transformers' save/load applies a
+        # legacy key rewrite (any key containing "gamma" -> "weight", "beta" ->
+        # "bias"), which silently drops a parameter literally named "gamma" on
+        # reload. `recursion_gate` matches no shim, so trained values round-trip.
+        self.recursion_gate = nn.Parameter(torch.zeros(1))
 
     def forward(
         self,
@@ -65,7 +69,7 @@ class AeonBlock(nn.Module):
         # 1. Read: shift the residual using r_t (broadcast across T)
         # r_t: (B, H_rec) -> m: (B, D) -> (B, 1, D) -> broadcast add to (B, T, D)
         m = self.U(r_t)                                # (B, D)
-        shift = (self.gamma * m).unsqueeze(1)          # (B, 1, D)
+        shift = (self.recursion_gate * m).unsqueeze(1)  # (B, 1, D)
         hidden_states = hidden_states + shift          # (B, T, D)
 
         # 2. Standard Qwen2 block

@@ -41,10 +41,10 @@ def test_forward_shapes():
 def test_recursion_gradients_flow():
     cfg, model = _tiny_model()
     model.train()
-    # lift gamma off zero so the recursion read contributes to the loss
+    # lift the gate off zero so the recursion read contributes to the loss
     with torch.no_grad():
         for blk in model.model.layers:
-            blk.gamma.fill_(0.1)
+            blk.recursion_gate.fill_(0.1)
 
     ids = torch.randint(0, cfg.vocab_size, (2, 8))
     labels = ids.clone()
@@ -59,7 +59,7 @@ def test_recursion_gradients_flow():
     blk0 = model.model.layers[0]
     assert blk0.U.weight.grad is not None and blk0.U.weight.grad.abs().sum() > 0
     assert blk0.D_proj.weight.grad is not None and blk0.D_proj.weight.grad.abs().sum() > 0
-    assert blk0.gamma.grad is not None and blk0.gamma.grad.abs().sum() > 0
+    assert blk0.recursion_gate.grad is not None and blk0.recursion_gate.grad.abs().sum() > 0
 
 
 def test_state_persists_across_calls():

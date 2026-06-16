@@ -27,10 +27,10 @@ right for co-training.
       (--recursion_lr, --backbone_lr) for exactly this. Tune both, and consider
       a warmup + cosine schedule on the backbone group only.
 
-  TODO(gamma serialization): resolve the gamma->weight save/load issue before
-      relying on Stage 2 checkpoints — see docs/STAGE1_REPORT.md. Trained gates
-      must round-trip or co-training progress on the gates will be lost on
-      every reload.
+  NOTE(gate serialization): resolved. The gate param is now `recursion_gate`
+      (no HF shim collision), so Stage 2 checkpoints round-trip cleanly. A
+      pre-rename Stage 1 checkpoint must be passed through
+      scripts/fix_gate_keys.py once before it will load here.
 
 Usage (once the TODOs are settled):
     python scripts/train_stage2.py --init ./aeon_stage1 --data <path> --out ./aeon_stage2
@@ -46,12 +46,12 @@ from scripts.train_stage1 import collate  # reuse the collate fn
 
 
 def is_recursion_param(name: str) -> bool:
-    """The params Stage 1 trained: recursion cell + per-block U / D_proj / gamma."""
+    """The params Stage 1 trained: recursion cell + per-block U / D_proj / recursion_gate."""
     return (
         "recursion." in name
         or name.endswith(".U.weight")
         or name.endswith(".D_proj.weight")
-        or name.endswith(".gamma")
+        or name.endswith(".recursion_gate")
         or "r_init" in name
         or "c_init" in name
     )
@@ -121,10 +121,10 @@ def main():
             opt.step()
 
             if step % 10 == 0:
-                gammas = [model.model.layers[l].gamma.item()
-                          for l in range(len(model.model.layers))]
+                gates = [model.model.layers[l].recursion_gate.item()
+                         for l in range(len(model.model.layers))]
                 print(f"step {step:6d}  loss {loss.item():.4f}  "
-                      f"mean|g|={sum(abs(g) for g in gammas)/len(gammas):.4f}")
+                      f"mean|g|={sum(abs(g) for g in gates)/len(gates):.4f}")
             if step % args.audit_every == 0:
                 a = audit_certificates(model.model.recursion)
                 print(f"  audit: sigma(Wh)={a['chart_A_sigma_Wh']:.4f}  "

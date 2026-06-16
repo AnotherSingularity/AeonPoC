@@ -90,7 +90,7 @@ are expected to grow into a load-bearing role.
    not raw logit distance. Gate updated to `tol=5e-1` **and** an argmax
    assertion across all prompts.
 
-### Also discovered (NOT yet fixed) — gamma serialization
+### Also discovered (now fixed) — gate serialization
 
 The per-block gate is a parameter literally named `gamma`. transformers'
 `save_pretrained`/`from_pretrained` apply a legacy key rewrite (`gamma`→`weight`,
@@ -106,8 +106,19 @@ zero-initialized value.
   surface this; if it reads ~0, the gates didn't survive reload.
 
 The trained values are not destroyed — they live in the checkpoint under
-`model.layers.N.weight` — but a recovery step (key remap) or a parameter rename
-is needed before they can be used. See the open item in the handoff notes.
+`model.layers.N.weight`.
+
+**Resolution.** Two changes:
+1. The gate parameter was renamed `gamma` → `recursion_gate` (matches no HF
+   shim), so all checkpoints saved by current code round-trip correctly.
+2. `scripts/fix_gate_keys.py` recovers a pre-rename checkpoint by remapping the
+   stray `model.layers.N.weight` keys to `model.layers.N.recursion_gate`. The
+   Stage 1 checkpoint must be passed through it once before it will load with
+   current code (or run in `probe_ablation.py` / Stage 2).
+
+Note the remap target is `recursion_gate`, **not** `gamma`: the HF shim also
+fires on *load*, so a recovered `.gamma` key would be rewritten back to
+`.weight` and still fail to match. Only a shim-immune name round-trips.
 
 ## Architectural note
 
