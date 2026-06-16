@@ -52,6 +52,7 @@ def main():
     hcfg = AeonConfig(**r1.config.to_dict())
     hcfg.h_rec = args.h_rec
     hcfg.model_type = "aeon_r1"
+    hcfg._attn_implementation = r1.config._attn_implementation  # match R1's attention kernel
     aeon = AeonR1ForCausalLM(hcfg).to(torch.bfloat16)
 
     print("porting weights ...")

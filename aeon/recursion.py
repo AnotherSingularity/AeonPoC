@@ -60,8 +60,16 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------------
 
 def sigma_max(W: torch.Tensor) -> float:
-    """Largest singular value of W. Pure read-off, never modifies."""
-    return torch.linalg.svdvals(W.detach()).max().item()
+    """Largest singular value of W. Pure read-off, never modifies.
+
+    torch.linalg.svdvals does not support bf16/fp16 on CUDA (cusolver
+    gesvdj only supports fp32/fp64). The audit doesn't care about
+    precision, so cast to fp32 for the SVD.
+    """
+    Wd = W.detach()
+    if Wd.dtype in (torch.bfloat16, torch.float16):
+        Wd = Wd.float()
+    return torch.linalg.svdvals(Wd).max().item()
 
 
 def project_sigma_(W: torch.Tensor, target: float):
@@ -79,10 +87,16 @@ def cayley(A: torch.Tensor) -> torch.Tensor:
         S = A - A^T            (skew-symmetric)
         Q = (I + S)^{-1} (I - S)
     Q satisfies Q^T Q = I. Smooth in A so gradients flow cleanly.
+
+    torch.linalg.solve does not support bf16 on CUDA (cusolver lu_factor
+    only supports fp32/fp64), so we compute the solve in fp32 and cast back.
     """
-    S = A - A.transpose(-2, -1)
+    orig_dtype = A.dtype
+    A_f = A.float() if A.dtype in (torch.bfloat16, torch.float16) else A
+    S = A_f - A_f.transpose(-2, -1)
     I = torch.eye(S.shape[-1], dtype=S.dtype, device=S.device)
-    return torch.linalg.solve(I + S, I - S)
+    Q = torch.linalg.solve(I + S, I - S)
+    return Q.to(orig_dtype)
 
 
 # ---------------------------------------------------------------------------
