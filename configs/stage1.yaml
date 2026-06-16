@@ -1,0 +1,27 @@
+# Stage 1 — recursion warm-up on a frozen backbone (instruction data).
+model:
+  init: ./aeon_init            # checkpoint produced by scripts/init_from_pretrained.py
+  recursion_chunk_size: 1      # K=1: exact per-token, recursion trains (see docs/LAYER3_BRIEF.md)
+  dtype: bfloat16
+train:
+  freeze: backbone             # train only the recursion path
+  steps: 2000
+  batch_size: 1
+  seq_len: 512
+  lr: 1.0e-4
+  weight_decay: 0.0
+  grad_clip: 1.0
+  warmup_steps: 0
+  seed: 42
+data:
+  path: ./alpaca.jsonl         # jsonl with a "text" field per row
+  text_field: text
+  curriculum: false
+eval:
+  every: 0
+  holdout_rows: 100
+log:
+  every: 10
+  audit_every: 50
+  checkpoint_every: 500
+  out: ./aeon_stage1

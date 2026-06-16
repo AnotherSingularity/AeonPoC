@@ -1,0 +1,28 @@
+# Stage 2 study — frozen backbone, length curriculum, multi-turn data.
+# Backbone stays frozen (this is the characterization study, not co-training).
+model:
+  init: ./aeon_init
+  recursion_chunk_size: 1      # K<seq_len required for the recursion to train
+  dtype: bfloat16
+train:
+  freeze: backbone
+  steps: 30000
+  batch_size: 1
+  seq_len: 1536                # 3090 VRAM cap (see docs/ENVIRONMENT.md)
+  lr: 5.0e-5
+  weight_decay: 0.01
+  grad_clip: 1.0
+  warmup_steps: 1000
+  seed: 42
+data:
+  path: ./ultrachat.jsonl
+  text_field: text
+  curriculum: true             # length curriculum (aeon.data.CurriculumSampler)
+eval:
+  every: 5000
+  holdout_rows: 200
+log:
+  every: 50
+  audit_every: 200
+  checkpoint_every: 1000
+  out: ./aeon_stage2
