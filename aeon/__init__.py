@@ -20,6 +20,32 @@ from .recursion import (
     equivalence_check,
 )
 
+
+def register_for_auto_classes():
+    """Register Aeon with the transformers Auto* factories.
+
+    Lets `AutoConfig.from_pretrained` / `AutoModelForCausalLM.from_pretrained`
+    resolve Aeon checkpoints in-process, and tags the classes so save_pretrained
+    / push_to_hub emit an `auto_map` (loadable from the Hub with
+    trust_remote_code=True). Idempotent and best-effort.
+    """
+    try:
+        from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
+        AutoConfig.register("aeon", AeonConfig, exist_ok=True)
+        AutoModel.register(AeonConfig, AeonModel, exist_ok=True)
+        AutoModelForCausalLM.register(AeonConfig, AeonForCausalLM, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        AeonConfig.register_for_auto_class("AutoConfig")
+        AeonModel.register_for_auto_class("AutoModel")
+        AeonForCausalLM.register_for_auto_class("AutoModelForCausalLM")
+    except Exception:
+        pass
+
+
+register_for_auto_classes()
+
 __all__ = [
     "AeonConfig",
     "AeonBlock",
@@ -40,4 +66,6 @@ __all__ = [
     "RecursionChartB",
     "audit_certificates",
     "equivalence_check",
+    "register_for_auto_classes",
 ]
+
