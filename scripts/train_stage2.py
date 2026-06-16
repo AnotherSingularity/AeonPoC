@@ -1,12 +1,38 @@
 """
-scripts/train_stage2.py — Stage 2: full co-training.
+scripts/train_stage2.py — Stage 2: full co-training (UNFROZEN backbone).
 
-Same objective and data format as Stage 1, but the R1 backbone is unfrozen
-and the learning rate is lowered. Optional — Stage 1's output is already a
-working chat model. By the end of Stage 2 the recursion path should be
-load-bearing: ablating it (model.disable_recursion()) should degrade quality.
+Loads a Stage 1 checkpoint and continues training with the backbone unfrozen so
+attention/MLP and the recursion path adapt to each other. By the end, ablating
+the recursion path (`disable_recursion()`) should degrade quality — that is the
+proof the recursion has become load-bearing.
 
-Usage:
+STATUS: scaffold. The pieces below run, but the recipe is NOT finalized. See the
+TODOs before launching a real Stage 2 — Stage 1's data/curriculum/LR will not be
+right for co-training.
+
+  TODO(dataset): alpaca (~52k short instruction pairs) is too small and too
+      short to co-train a 1.5B backbone without overfitting / catastrophic
+      forgetting. Move to a larger, longer-context instruction/chat mix
+      (e.g. OpenAssistant + a FLAN slice + some long-form), and hold out a
+      val set to watch for backbone drift.
+
+  TODO(curriculum): the recursion only earns its keep when the sequence is long
+      enough to need cross-token memory. Use a length curriculum — start near
+      the Stage 1 seq_len and grow it — so the global state is actually
+      exercised rather than bypassed by local attention.
+
+  TODO(lr): the recursion params were warmed up at lr=1e-4; the backbone is
+      pretrained and must move much more slowly (~1e-5 or lower) to avoid
+      wrecking R1's behavior. This script uses two param groups
+      (--recursion_lr, --backbone_lr) for exactly this. Tune both, and consider
+      a warmup + cosine schedule on the backbone group only.
+
+  TODO(gamma serialization): resolve the gamma->weight save/load issue before
+      relying on Stage 2 checkpoints — see docs/STAGE1_REPORT.md. Trained gates
+      must round-trip or co-training progress on the gates will be lost on
+      every reload.
+
+Usage (once the TODOs are settled):
     python scripts/train_stage2.py --init ./aeon_stage1 --data <path> --out ./aeon_stage2
 """
 import os, sys, argparse, json
@@ -19,16 +45,32 @@ from aeon.recursion import audit_certificates
 from scripts.train_stage1 import collate  # reuse the collate fn
 
 
+def is_recursion_param(name: str) -> bool:
+    """The params Stage 1 trained: recursion cell + per-block U / D_proj / gamma."""
+    return (
+        "recursion." in name
+        or name.endswith(".U.weight")
+        or name.endswith(".D_proj.weight")
+        or name.endswith(".gamma")
+        or "r_init" in name
+        or "c_init" in name
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--init", default="./aeon_stage1")
+    ap.add_argument("--init", default="./aeon_stage1",
+                    help="Stage 1 checkpoint to continue from")
     ap.add_argument("--out", default="./aeon_stage2")
     ap.add_argument("--data", required=True,
                     help="path to a .jsonl file with field 'text' per row")
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--batch_size", type=int, default=1)
     ap.add_argument("--seq_len", type=int, default=512)
-    ap.add_argument("--lr", type=float, default=5e-6)
+    ap.add_argument("--recursion_lr", type=float, default=1e-4,
+                    help="LR for the recursion path (continues Stage 1)")
+    ap.add_argument("--backbone_lr", type=float, default=1e-5,
+                    help="LR for the unfrozen R1 backbone (much lower)")
     ap.add_argument("--audit_every", type=int, default=50)
     ap.add_argument("--save_every", type=int, default=500)
     args, _ = ap.parse_known_args()
@@ -38,20 +80,27 @@ def main():
     model = AeonR1ForCausalLM.from_pretrained(
         args.init, torch_dtype=torch.bfloat16).to(device)
     tok = AutoTokenizer.from_pretrained(args.init)
-    # Stage 2: everything trains. No freeze call.
+
+    # Stage 2: everything trains, but in two LR groups.
     for p in model.parameters():
         p.requires_grad_(True)
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"trainable: {trainable:,} (full co-training)")
+    recursion_params, backbone_params = [], []
+    for name, p in model.named_parameters():
+        (recursion_params if is_recursion_param(name) else backbone_params).append(p)
+    n_rec = sum(p.numel() for p in recursion_params)
+    n_bb = sum(p.numel() for p in backbone_params)
+    print(f"recursion group: {n_rec:,} params @ lr={args.recursion_lr}")
+    print(f"backbone  group: {n_bb:,} params @ lr={args.backbone_lr}")
     model.train()
 
     with open(args.data) as f:
         rows = [json.loads(line)["text"] for line in f if line.strip()]
     print(f"{len(rows)} training rows")
 
-    opt = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad], lr=args.lr
-    )
+    opt = torch.optim.AdamW([
+        {"params": recursion_params, "lr": args.recursion_lr},
+        {"params": backbone_params, "lr": args.backbone_lr},
+    ])
 
     step = 0
     for epoch in range(10**6):
