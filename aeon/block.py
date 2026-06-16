@@ -1,28 +1,28 @@
 """
 aeon/block.py — AeonBlock.
 
-Wraps a Qwen2DecoderLayer with recursion read/write:
+Wraps an AeonDecoderLayer with the recurrent read/write path:
   read:  shift the residual stream by gamma_l * U_l @ r_t  BEFORE attention
   write: produce w_l = D_l @ x_post  AFTER attention+MLP
 
-The AeonModel collects all w_l from all blocks for one token, averages
-them, and runs one Recursion step to update (r, c) before the next token.
+The AeonModel collects all w_l from all blocks for one token, averages them, and
+runs one recurrent step to update (r, c) before the next token.
 
-At init: gamma_l = 0. Stage 0 verifier requires byte-identical output
-to vanilla Qwen2 with these gates at zero.
+At init: gamma_l = 0, so the block is exactly its transformer layer — the
+byte-identity gate requires output identical to the reference with the gates at
+zero.
 """
 import torch
 import torch.nn as nn
-from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer
+from .transformer import AeonDecoderLayer
 
 
 class AeonBlock(nn.Module):
     """
-    A drop-in replacement for Qwen2DecoderLayer that wraps the underlying
-    Qwen2DecoderLayer with recursion read/write paths.
+    A transformer block augmented with the recurrent read/write paths.
 
-    The underlying Qwen2DecoderLayer is unchanged in structure; we add
-    a residual shift before it and produce a recursion write after it.
+    The underlying AeonDecoderLayer is unchanged in structure; we add a residual
+    shift before it and produce a recurrent write after it.
     """
 
     def __init__(self, config, layer_idx: int):
@@ -31,8 +31,8 @@ class AeonBlock(nn.Module):
         self.D = config.hidden_size
         self.H_rec = config.h_rec
 
-        # The underlying Qwen2 block — loads R1's weights into here
-        self.qwen_block = Qwen2DecoderLayer(config, layer_idx)
+        # The underlying transformer layer — warm-started weights load into here
+        self.transformer_layer = AeonDecoderLayer(config, layer_idx)
 
         # Recursion read: r_t (B, H_rec) -> shift (B, D)
         self.U = nn.Linear(self.H_rec, self.D, bias=False)
@@ -63,7 +63,7 @@ class AeonBlock(nn.Module):
         **kwargs,
     ):
         """
-        Returns: (hidden_states_out, w_l, *qwen_outputs)
+        Returns: (hidden_states_out, w_l, *layer_outputs)
             w_l : (B, T, H_rec) per-token recursion writes from this block
         """
         # 1. Read: shift the residual using r_t (broadcast across T)
@@ -72,24 +72,24 @@ class AeonBlock(nn.Module):
         shift = (self.recursion_gate * m).unsqueeze(1)  # (B, 1, D)
         hidden_states = hidden_states + shift          # (B, T, D)
 
-        # 2. Standard Qwen2 block
-        qwen_out = self.qwen_block(
+        # 2. The transformer layer
+        layer_out = self.transformer_layer(
             hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=cache_position,
             position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value,
+            cache_position=cache_position,
+            use_cache=use_cache,
+            position_ids=position_ids,
+            output_attentions=output_attentions,
             **kwargs,
         )
-        # Qwen2DecoderLayer returns a tuple; the first element is hidden_states
-        if isinstance(qwen_out, tuple):
-            hidden_states_out = qwen_out[0]
-            rest = qwen_out[1:]
+        # AeonDecoderLayer returns a tuple; the first element is hidden_states
+        if isinstance(layer_out, tuple):
+            hidden_states_out = layer_out[0]
+            rest = layer_out[1:]
         else:
-            hidden_states_out = qwen_out
+            hidden_states_out = layer_out
             rest = ()
 
         # 3. Write: per-token recursion proposal from this block

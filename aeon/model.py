@@ -1,10 +1,14 @@
 """
-aeon/model.py — AeonForCausalLM.
+aeon/model.py — AeonModel and AeonForCausalLM.
 
-The Aeon causal language model: a transformer stack where every block reads from
-and writes to a single global recurrent state (the contractive cell in
-aeon/recursion.py). The state persists across tokens and across calls, giving the
-model continuity that a vanilla transformer does not have.
+The Aeon causal language model, built on Aeon's own transformer components
+(aeon/transformer.py, attention.py, feedforward.py, embedding.py, cache.py). It
+extends the transformers PreTrainedModel base for serialization/generation
+infrastructure but contains none of another model's modeling code.
+
+Every block reads from and writes to a single global recurrent state (the
+contractive cell in aeon/recursion.py) that persists across tokens and across
+calls, giving the model continuity a vanilla transformer does not have:
 
   - Each block applies a recurrent read (a gated residual shift) before
     attention and produces a recurrent write afterwards.
@@ -15,56 +19,67 @@ Critical design point: r_t is read at the START of token t, BEFORE any block
 runs. The state update happens AFTER the full block stack finishes for token t,
 so token t+1 reads the state that incorporates token t's contribution.
 
-Generation: state persists across tokens within a generation call AND across
-calls (get_recursion_state / set_recursion_state), which is how the model carries
-continuity across chat turns.
-
-(Layer-1 note: this module still extends the transformers Qwen2 classes so it can
-warm-start from Qwen2-shaped pretrained weights. Layer 2 of the v2 cleanup
-replaces that with Aeon's own transformer implementation. References to Qwen2
-below are implementation detail, not public surface.)
-
-WIRING NOTES (required for the byte-identity gate to hold; see comments inline):
-
-  (1) KV CACHE THREADING. The per-token loop runs the full block stack on
-      one token at a time. For attention to be causal across the sequence
-      (i.e. token t attends to tokens 0..t-1), the per-layer key/value of
-      earlier tokens must be available when token t is processed. We thread
-      a single Cache object through the whole loop so each layer accumulates
-      its K/V left-to-right. Without this, every token would attend only to
-      itself and the forward would NOT match the reference -> gate fails.
-
-  (2) LM HEAD RE-TIE. The 1.5B base ties lm_head to embed_tokens. The parent
-      ties them in __init__, but we then replace self.model with AeonModel,
-      which builds a fresh embed_tokens. We must re-tie so lm_head follows the
-      new embeddings; otherwise lm_head stays attached to the discarded random
-      embeddings -> gate fails.
+WIRING NOTE — KV CACHE THREADING. The per-token loop runs the full block stack
+on one token at a time. For attention to be causal across the sequence (token t
+attends to tokens 0..t-1), the per-layer key/value of earlier tokens must be
+available when token t is processed, so we thread a single cache object through
+the whole loop. (Layer 3 of the v2 cleanup replaces this loop with a batched
+forward; the per-token loop is correct, not fast.)
 """
 import torch
 import torch.nn as nn
-from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM, Qwen2Model
-from transformers.modeling_outputs import BaseModelOutputWithPast
-from transformers.cache_utils import DynamicCache
+import torch.nn.functional as F
+from transformers.modeling_utils import PreTrainedModel
+from transformers.generation import GenerationMixin
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 from .config import AeonConfig
 from .block import AeonBlock
+from .embedding import AeonEmbedding, AeonRMSNorm, AeonRotaryEmbedding
+from .cache import AeonCache
 from .recursion import RecursionChartB, audit_certificates
 
 
-class AeonModel(Qwen2Model):
-    """The bare transformer with Aeon blocks and the recursion cell."""
-
+class AeonPreTrainedModel(PreTrainedModel):
     config_class = AeonConfig
+    base_model_prefix = "model"
+    supports_gradient_checkpointing = True
+    _no_split_modules = ["AeonBlock"]
+    _supports_sdpa = True
+    _supports_cache_class = True
+    _skip_keys_device_placement = "past_key_values"
+
+    def _init_weights(self, module):
+        std = self.config.initializer_range
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+
+
+class AeonModel(AeonPreTrainedModel):
+    """The bare transformer with Aeon blocks and the recurrent cell."""
 
     def __init__(self, config: AeonConfig):
         super().__init__(config)
-        # Replace each Qwen2DecoderLayer with an AeonBlock
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        self.embed_tokens = AeonEmbedding(config.vocab_size, config.hidden_size,
+                                          self.padding_idx)
         self.layers = nn.ModuleList([
             AeonBlock(config, layer_idx)
             for layer_idx in range(config.num_hidden_layers)
         ])
-        # Global recursion cell
-        # in_dim = H_rec because we feed it the aggregated write W_total (H_rec-wide)
+        self.norm = AeonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.rotary_emb = AeonRotaryEmbedding(config)
+
+        # Global recurrent cell. in_dim = H_rec: it consumes the aggregated,
+        # H_rec-wide per-block write W_total.
         self.recursion = RecursionChartB(
             in_dim=config.h_rec,
             H=config.h_rec,
@@ -80,12 +95,30 @@ class AeonModel(Qwen2Model):
             self.register_buffer("c_init", torch.zeros(config.h_rec))
 
         # Persistent state across calls (one per active batch).
-        self._persistent_r = None    # (B, H_rec) or None
-        self._persistent_c = None    # (B, H_rec) or None
-
-        # Toggle: True means inject recursion. False means run as plain Qwen2
-        # (used for Stage 0 verification and ablation experiments).
+        self._persistent_r = None
+        self._persistent_c = None
+        # True means inject recursion. False runs the bare transformer (gate test
+        # / ablation).
         self.recursion_enabled = True
+        self.gradient_checkpointing = False
+
+        # Preserve the canonical recurrent-cell init (and the small per-block
+        # U/D_proj init) from the generic _init_weights pass that post_init runs.
+        self._protect_custom_init()
+        self.post_init()
+
+    def _protect_custom_init(self):
+        for mod in self.recursion.modules():
+            mod._is_hf_initialized = True
+        for blk in self.layers:
+            blk.U._is_hf_initialized = True
+            blk.D_proj._is_hf_initialized = True
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.embed_tokens = value
 
     # ---- state management (chat persistence) ------------------------------
     @torch.no_grad()
@@ -117,24 +150,21 @@ class AeonModel(Qwen2Model):
         cache_position=None,
         **kwargs,
     ):
-        # Embedding
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
         hidden_states = inputs_embeds
         B, T, D = hidden_states.shape
         device = hidden_states.device
 
-        # Initialize / fetch persistent recursion state
+        # Initialize / fetch persistent recurrent state
         if self._persistent_r is None or self._persistent_r.shape[0] != B:
             self.reset_recursion_state(batch_size=B)
         r = self._persistent_r.to(device)
         c = self._persistent_c.to(device)
 
-        # KV cache that threads through the per-token loop so attention is
-        # causal across the whole sequence (wiring note (1)). We always use a
-        # Cache internally; we only return it to the caller when use_cache.
+        # KV cache threaded through the per-token loop (see wiring note).
         if past_key_values is None:
-            past_key_values = DynamicCache()
+            past_key_values = AeonCache()
         past_seen = past_key_values.get_seq_length()
 
         if cache_position is None:
@@ -142,15 +172,13 @@ class AeonModel(Qwen2Model):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        # RoPE position embeddings (Qwen2 computes them at model level since v4.43+)
         cos, sin = self.rotary_emb(hidden_states, position_ids)
 
         # Additive key-padding mask, built once over the full KV length.
-        # Causality itself needs no mask: in left-to-right processing the cache
-        # only ever holds keys at positions <= the current query, so attending
-        # to "all cached keys" IS causal attention. We only need to mask padded
-        # keys. For unpadded inputs (the Stage 0 prompts) this is all zeros and
-        # equals passing None.
+        # Causality needs no mask: in left-to-right processing the cache only
+        # holds keys at positions <= the current query, so attending to all
+        # cached keys IS causal. We only mask padded keys; for unpadded inputs
+        # this is None.
         add_mask = None
         if attention_mask is not None and (attention_mask == 0).any():
             min_val = torch.finfo(hidden_states.dtype).min
@@ -159,13 +187,10 @@ class AeonModel(Qwen2Model):
                                    dtype=hidden_states.dtype, device=device)
             add_mask = add_mask.masked_fill(am[:, None, None, :] == 0, min_val)
 
-        # Process tokens. The recursion state advances ONCE per token, after
-        # the full L-block stack has produced all per-block writes for that
-        # token.
         outputs_hidden = []
         n_layers = len(self.layers)
         for t in range(T):
-            h_t = hidden_states[:, t:t + 1, :]                       # (B, 1, D)
+            h_t = hidden_states[:, t:t + 1, :]
             pe_t = (cos[:, t:t + 1], sin[:, t:t + 1])
             cp_t = cache_position[t:t + 1]
             pid_t = position_ids[:, t:t + 1]
@@ -188,18 +213,15 @@ class AeonModel(Qwen2Model):
                 h_t, w_l = block_out[0], block_out[1]
                 W_sum = W_sum + w_l[:, 0, :]
 
-            # Update global recursion state with the aggregated write
             if self.recursion_enabled:
-                W_total = W_sum / n_layers                            # (B, H_rec)
+                W_total = W_sum / n_layers
                 r, c = self.recursion.step(W_total, r, c)
-            # else: leave r, c unchanged (each block was given zero r)
 
             outputs_hidden.append(h_t)
 
-        hidden_states = torch.cat(outputs_hidden, dim=1)            # (B, T, D)
+        hidden_states = torch.cat(outputs_hidden, dim=1)
         hidden_states = self.norm(hidden_states)
 
-        # Persist updated state for next call
         self._persistent_r = r.detach()
         self._persistent_c = c.detach()
 
@@ -211,19 +233,106 @@ class AeonModel(Qwen2Model):
         )
 
 
-class AeonForCausalLM(Qwen2ForCausalLM):
-    config_class = AeonConfig
+class AeonForCausalLM(AeonPreTrainedModel, GenerationMixin):
+    _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config: AeonConfig):
-        # Call parent so we set up lm_head etc.
         super().__init__(config)
-        # Replace self.model with our AeonModel
         self.model = AeonModel(config)
-        # Re-tie lm_head to the NEW embeddings (wiring note (2)).
+        self.vocab_size = config.vocab_size
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.post_init()
-        self.tie_weights()
 
-    # convenience
+    # ---- embedding / decoder accessors (used by tie_weights, resize, generate)
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.model.embed_tokens = value
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def set_output_embeddings(self, new_embeddings):
+        self.lm_head = new_embeddings
+
+    def set_decoder(self, decoder):
+        self.model = decoder
+
+    def get_decoder(self):
+        return self.model
+
+    # ---- forward --------------------------------------------------------
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        labels=None,
+        use_cache=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        cache_position=None,
+        num_logits_to_keep=0,
+        **kwargs,
+    ):
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            cache_position=cache_position,
+        )
+        hidden_states = outputs.last_hidden_state
+        slice_indices = (slice(-num_logits_to_keep, None)
+                         if num_logits_to_keep else slice(None))
+        logits = self.lm_head(hidden_states[:, slice_indices, :]).float()
+
+        loss = None
+        if labels is not None:
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1).to(shift_logits.device),
+                ignore_index=-100,
+            )
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=None,
+            attentions=None,
+        )
+
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None,
+                                      attention_mask=None, inputs_embeds=None,
+                                      cache_position=None, use_cache=True, **kwargs):
+        past_len = 0
+        if past_key_values is not None:
+            past_len = past_key_values.get_seq_length()
+            if input_ids.shape[1] > past_len:
+                input_ids = input_ids[:, past_len:]
+            else:
+                input_ids = input_ids[:, -1:]
+        if cache_position is None:
+            cache_position = torch.arange(past_len, past_len + input_ids.shape[1],
+                                          device=input_ids.device)
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "use_cache": use_cache,
+            "attention_mask": attention_mask,
+            "cache_position": cache_position,
+        }
+
+    # ---- convenience ----------------------------------------------------
     def reset_recursion_state(self, batch_size: int = 1):
         self.model.reset_recursion_state(batch_size)
 

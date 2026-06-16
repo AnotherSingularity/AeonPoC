@@ -33,10 +33,11 @@ def port_weights(r1: Qwen2ForCausalLM, aeon: AeonForCausalLM):
     # If the source ties them, AeonForCausalLM.__init__ already re-tied
     # lm_head to the (now R1-loaded) embeddings, so nothing to do.
 
-    # Per-layer: copy Qwen2DecoderLayer state into the wrapped qwen_block
+    # Per-layer: copy the source decoder-layer state into the wrapped
+    # AeonDecoderLayer. Submodule names match, so this is a strict load.
     for l in range(aeon.config.num_hidden_layers):
         src = r1.model.layers[l]
-        dst = aeon.model.layers[l].qwen_block
+        dst = aeon.model.layers[l].transformer_layer
         dst.load_state_dict(src.state_dict(), strict=True)
 
 

@@ -56,6 +56,16 @@ This was fine for Stage 1 — get a working architecture quickly, ship a real ar
 
 **Validation:** All existing tests still pass. `grep -ri "r1\|qwen\|deepseek" aeon/ tests/` should return zero results in user-facing code (implementation comments are OK to leave).
 
+> **Layer 1 completion note (2026-06-16):** Layer 1 is complete and the README
+> architecture overview is intentionally kept locked (a comment marker holds its
+> eventual place; disclosure level is decided after Stage 2 + license). The grep
+> above is intentionally NOT zero after Layer 1: the remaining `Qwen2*` references
+> in `aeon/model.py`, `aeon/block.py`, and `aeon/config.py` are base-class/import
+> *implementation*, not public surface. They are removed in **Layer 2**, which
+> replaces those base classes with Aeon's own transformer. Layer 1's surface goal
+> (class names, `model_type`, file names, docstrings, exports) is met; the
+> residual references resolve in Layer 2, by design.
+
 ---
 
 ### Layer 2 — Own the Transformer Implementation
