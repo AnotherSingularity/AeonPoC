@@ -4,7 +4,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from aeon.model import AeonR1ForCausalLM
+from aeon.model import AeonForCausalLM
 
 
 PROMPTS = [
@@ -24,7 +24,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     print(f"loading Aeon from {args.aeon} ...")
-    aeon = AeonR1ForCausalLM.from_pretrained(
+    aeon = AeonForCausalLM.from_pretrained(
         args.aeon, torch_dtype=torch.bfloat16, attn_implementation="sdpa"
     ).to(device).eval()
     aeon.disable_recursion()

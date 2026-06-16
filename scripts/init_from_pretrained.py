@@ -1,12 +1,15 @@
 """
-scripts/from_r1.py — port DeepSeek-R1-Distill-Qwen-1.5B weights into AeonR1.
+scripts/init_from_pretrained.py — warm-start Aeon from a compatible pretrained
+transformer.
+
+Instantiates an AeonForCausalLM and copies the attention / MLP / embedding /
+norm weights from a Qwen2-shaped pretrained checkpoint, leaving Aeon's recurrent
+path freshly initialized. The default source is the 1.5B distilled checkpoint
+used to bootstrap Stage 1, but any architecture with matching shapes works.
 
 Usage:
-    python scripts/from_r1.py --out ./aeon_init/
-
-Downloads R1-Distill-Qwen-1.5B via HuggingFace, instantiates an AeonR1,
-copies all attention/MLP/embedding/norm weights, leaves recursion paths
-fresh, saves checkpoint.
+    python scripts/init_from_pretrained.py --out ./aeon_init/
+    python scripts/init_from_pretrained.py --src <hf-model-id> --out ./aeon_init/
 """
 import argparse, os, sys
 import torch
@@ -16,10 +19,10 @@ from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 # Make sure aeon is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aeon.config import AeonConfig
-from aeon.model import AeonR1ForCausalLM
+from aeon.model import AeonForCausalLM
 
 
-def port_weights(r1: Qwen2ForCausalLM, aeon: AeonR1ForCausalLM):
+def port_weights(r1: Qwen2ForCausalLM, aeon: AeonForCausalLM):
     """Copy R1's parameters into Aeon. Recursion paths untouched."""
     # Embeddings + final norm + lm_head
     aeon.model.embed_tokens.weight.data.copy_(r1.model.embed_tokens.weight.data)
@@ -27,7 +30,7 @@ def port_weights(r1: Qwen2ForCausalLM, aeon: AeonR1ForCausalLM):
     # lm_head: may be tied. If untied in the source, copy it explicitly.
     if id(r1.lm_head.weight) != id(r1.model.embed_tokens.weight):
         aeon.lm_head.weight.data.copy_(r1.lm_head.weight.data)
-    # If the source ties them, AeonR1ForCausalLM.__init__ already re-tied
+    # If the source ties them, AeonForCausalLM.__init__ already re-tied
     # lm_head to the (now R1-loaded) embeddings, so nothing to do.
 
     # Per-layer: copy Qwen2DecoderLayer state into the wrapped qwen_block
@@ -51,9 +54,9 @@ def main():
     print("building AeonR1 with config from R1 ...")
     hcfg = AeonConfig(**r1.config.to_dict())
     hcfg.h_rec = args.h_rec
-    hcfg.model_type = "aeon_r1"
+    hcfg.model_type = "aeon"
     hcfg._attn_implementation = r1.config._attn_implementation  # match R1's attention kernel
-    aeon = AeonR1ForCausalLM(hcfg).to(torch.bfloat16)
+    aeon = AeonForCausalLM(hcfg).to(torch.bfloat16)
 
     print("porting weights ...")
     port_weights(r1, aeon)

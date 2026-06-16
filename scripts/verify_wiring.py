@@ -4,7 +4,7 @@ scripts/verify_wiring.py — OFFLINE byte-identity wiring gate.
 The Stage 0 gate (scripts/verify_stage0.py) compares Aeon against the real
 R1-Distill download. This script verifies the SAME wiring property without any
 download: it builds a small *random* Qwen2 of the same family, ports its
-weights into Aeon exactly as from_r1.py does, and checks that with gamma=0
+weights into Aeon exactly as init_from_pretrained.py does, and checks that with gamma=0
 everywhere the Aeon forward is byte-identical to the vanilla Qwen2 forward.
 
 Run in fp32 where round-off is tiny: expect worst max|dlogit| ~ 1e-6. A wiring
@@ -22,8 +22,8 @@ from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aeon.config import AeonConfig
-from aeon.model import AeonR1ForCausalLM
-from scripts.from_r1 import port_weights
+from aeon.model import AeonForCausalLM
+from scripts.init_from_pretrained import port_weights
 
 
 def build_small_qwen(seed=0, tie=True):
@@ -62,9 +62,9 @@ def main():
 
         acfg = AeonConfig(**cfg.to_dict())
         acfg.h_rec = args.h_rec
-        acfg.model_type = "aeon_r1"
+        acfg.model_type = "aeon"
         acfg._attn_implementation = "eager"
-        aeon = AeonR1ForCausalLM(acfg)
+        aeon = AeonForCausalLM(acfg)
         aeon.eval()
 
         port_weights(vanilla, aeon)

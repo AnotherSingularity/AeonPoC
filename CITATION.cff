@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use Aeon, please cite it as below."
+title: "Aeon: a small, efficient language model"
+abstract: "A compact language model with a bounded recurrent path."
+type: software
+version: "0.2.0-dev"
+date-released: "2026-06-16"
+authors:
+  - family-names: "<TODO>"
+    given-names: "<TODO>"
+# repository-code: "<TODO: public repository URL>"
+# license: "<TODO: finalized license SPDX id>"
+keywords:
+  - "language model"
+  - "machine learning"

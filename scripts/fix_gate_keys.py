@@ -106,8 +106,8 @@ def fix_checkpoint(ckpt, out, target_suffix="recursion_gate"):
 
 def verify(out):
     """Reload the corrected checkpoint and read the gate values back."""
-    from aeon.model import AeonR1ForCausalLM
-    model = AeonR1ForCausalLM.from_pretrained(out, torch_dtype=torch.float32)
+    from aeon.model import AeonForCausalLM
+    model = AeonForCausalLM.from_pretrained(out, torch_dtype=torch.float32)
     return [blk.recursion_gate.item() for blk in model.model.layers]
 
 

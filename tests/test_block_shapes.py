@@ -10,7 +10,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aeon.config import AeonConfig
-from aeon.model import AeonR1ForCausalLM
+from aeon.model import AeonForCausalLM
 
 
 def _tiny_model():
@@ -26,7 +26,7 @@ def _tiny_model():
         tie_word_embeddings=True,
     )
     cfg._attn_implementation = "eager"
-    return cfg, AeonR1ForCausalLM(cfg)
+    return cfg, AeonForCausalLM(cfg)
 
 
 def test_forward_shapes():
@@ -69,5 +69,5 @@ def test_state_persists_across_calls():
     ids = torch.randint(0, cfg.vocab_size, (1, 5))
     with torch.no_grad():
         model(input_ids=ids)
-    r1, c1 = model.model.get_recursion_state()
-    assert r1 is not None and r1.abs().sum() > 0  # state advanced off zero
+    r_state, c_state = model.model.get_recursion_state()
+    assert r_state is not None and r_state.abs().sum() > 0  # state advanced off zero

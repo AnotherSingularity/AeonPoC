@@ -9,7 +9,7 @@ import torch
 from transformers import AutoTokenizer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from aeon.model import AeonR1ForCausalLM
+from aeon.model import AeonForCausalLM
 
 
 SYSTEM_PROMPT = (
@@ -43,7 +43,7 @@ def main():
     args, _ = ap.parse_known_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model = AeonR1ForCausalLM.from_pretrained(
+    model = AeonForCausalLM.from_pretrained(
         args.ckpt, torch_dtype=torch.bfloat16
     ).to(device).eval()
     tok = AutoTokenizer.from_pretrained(args.ckpt)

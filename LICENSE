@@ -1,0 +1,10 @@
+Copyright (c) 2026 The Aeon Authors. All rights reserved.
+
+NOTE: This is a placeholder. The open-source license for Aeon has not been
+finalized (candidates under consideration include Apache-2.0, AGPL-3.0, and a
+custom community license). Until a license is chosen and this file is replaced
+with its full text, no license is granted and all rights are reserved.
+
+When the license is selected, replace this file in its entirety with the
+canonical license text and update the `license` field in pyproject.toml,
+CITATION.cff, and MODEL_CARD.md to match.

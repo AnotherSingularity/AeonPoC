@@ -40,7 +40,7 @@ import torch
 from transformers import AutoTokenizer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from aeon.model import AeonR1ForCausalLM
+from aeon.model import AeonForCausalLM
 from aeon.recursion import audit_certificates
 from scripts.train_stage1 import collate  # reuse the collate fn
 
@@ -77,7 +77,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     print(f"loading from {args.init} ...")
-    model = AeonR1ForCausalLM.from_pretrained(
+    model = AeonForCausalLM.from_pretrained(
         args.init, torch_dtype=torch.bfloat16).to(device)
     tok = AutoTokenizer.from_pretrained(args.init)
 

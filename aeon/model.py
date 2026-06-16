@@ -1,23 +1,30 @@
 """
-aeon/model.py — AeonR1ForCausalLM.
+aeon/model.py — AeonForCausalLM.
 
-Subclasses Qwen2ForCausalLM. Overrides the forward pass to:
-  - Replace Qwen2DecoderLayer with AeonBlock at each layer
-  - Maintain a global recursion state (r, c) that persists across tokens
-  - After each token's full block stack, run one Recursion step to
-    update (r, c) from the aggregated per-block writes
+The Aeon causal language model: a transformer stack where every block reads from
+and writes to a single global recurrent state (the contractive cell in
+aeon/recursion.py). The state persists across tokens and across calls, giving the
+model continuity that a vanilla transformer does not have.
 
-Critical design point: r_t is read at the START of token t, BEFORE any
-block runs. The state update happens AFTER the full L-block stack
-finishes for token t. This means token t+1 reads the state that
-incorporates token t's contribution.
+  - Each block applies a recurrent read (a gated residual shift) before
+    attention and produces a recurrent write afterwards.
+  - After a token's full block stack runs, one recurrent step advances the
+    global state (r, c) from the aggregated per-block writes.
 
-Generation: state persists across tokens within a generation call AND
-across calls (the model exposes get_recursion_state / set_recursion_state).
-This is how the model carries continuity across chat turns.
+Critical design point: r_t is read at the START of token t, BEFORE any block
+runs. The state update happens AFTER the full block stack finishes for token t,
+so token t+1 reads the state that incorporates token t's contribution.
 
-WIRING NOTES (deviations from the handoff sketch, required for the
-Stage 0 byte-identity gate to hold; see comments inline):
+Generation: state persists across tokens within a generation call AND across
+calls (get_recursion_state / set_recursion_state), which is how the model carries
+continuity across chat turns.
+
+(Layer-1 note: this module still extends the transformers Qwen2 classes so it can
+warm-start from Qwen2-shaped pretrained weights. Layer 2 of the v2 cleanup
+replaces that with Aeon's own transformer implementation. References to Qwen2
+below are implementation detail, not public surface.)
+
+WIRING NOTES (required for the byte-identity gate to hold; see comments inline):
 
   (1) KV CACHE THREADING. The per-token loop runs the full block stack on
       one token at a time. For attention to be causal across the sequence
@@ -25,13 +32,13 @@ Stage 0 byte-identity gate to hold; see comments inline):
       earlier tokens must be available when token t is processed. We thread
       a single Cache object through the whole loop so each layer accumulates
       its K/V left-to-right. Without this, every token would attend only to
-      itself and the forward would NOT match vanilla Qwen2 -> Stage 0 fails.
+      itself and the forward would NOT match the reference -> gate fails.
 
-  (2) LM HEAD RE-TIE. Qwen2-1.5B / R1-Distill tie lm_head to embed_tokens.
-      Qwen2ForCausalLM ties them in __init__, but we then replace self.model
-      with AeonModel, which builds a fresh embed_tokens. We must re-tie so
-      lm_head follows the new embeddings; otherwise lm_head stays attached to
-      the discarded random embeddings -> Stage 0 fails.
+  (2) LM HEAD RE-TIE. The 1.5B base ties lm_head to embed_tokens. The parent
+      ties them in __init__, but we then replace self.model with AeonModel,
+      which builds a fresh embed_tokens. We must re-tie so lm_head follows the
+      new embeddings; otherwise lm_head stays attached to the discarded random
+      embeddings -> gate fails.
 """
 import torch
 import torch.nn as nn
@@ -204,7 +211,7 @@ class AeonModel(Qwen2Model):
         )
 
 
-class AeonR1ForCausalLM(Qwen2ForCausalLM):
+class AeonForCausalLM(Qwen2ForCausalLM):
     config_class = AeonConfig
 
     def __init__(self, config: AeonConfig):
@@ -221,7 +228,7 @@ class AeonR1ForCausalLM(Qwen2ForCausalLM):
         self.model.reset_recursion_state(batch_size)
 
     def disable_recursion(self):
-        """Stage 0 / ablation: run as plain Qwen2."""
+        """Ablation / warm-start gate: run with the recurrent path inert."""
         self.model.recursion_enabled = False
 
     def enable_recursion(self):

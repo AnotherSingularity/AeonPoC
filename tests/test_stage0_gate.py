@@ -10,8 +10,8 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM
 from aeon.config import AeonConfig
-from aeon.model import AeonR1ForCausalLM
-from scripts.from_r1 import port_weights
+from aeon.model import AeonForCausalLM
+from scripts.init_from_pretrained import port_weights
 from scripts.verify_wiring import build_small_qwen
 
 
@@ -20,7 +20,7 @@ def _check(tie):
     acfg = AeonConfig(**cfg.to_dict())
     acfg.h_rec = 32
     acfg._attn_implementation = "eager"
-    aeon = AeonR1ForCausalLM(acfg).eval()
+    aeon = AeonForCausalLM(acfg).eval()
     port_weights(vanilla, aeon)
     aeon.disable_recursion()
 
