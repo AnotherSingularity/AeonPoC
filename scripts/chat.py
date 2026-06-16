@@ -12,6 +12,29 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aeon.model import AeonR1ForCausalLM
 
 
+SYSTEM_PROMPT = (
+    "You are Aeon, a small language model. Respond as Aeon. Be concise and "
+    "direct. Do not narrate your reasoning unless asked."
+)
+
+
+def split_response(text: str) -> str:
+    """Separate any internal dialog from the final reply.
+
+    Best-effort: R1-Distill-Qwen-1.5B does not reliably emit </think> tags at
+    this scale, so we fall back to a paragraph heuristic.
+      - if the output has a </think>, the reply is everything after it
+      - else if it has a blank line, take everything after the LAST one
+        (the final paragraph is usually the actual answer)
+      - else return the whole thing
+    """
+    if "</think>" in text:
+        return text.split("</think>")[-1].strip()
+    if "\n\n" in text:
+        return text.rsplit("\n\n", 1)[-1].strip()
+    return text.strip()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
@@ -45,13 +68,18 @@ def main():
             continue
 
         history.append({"role": "user", "content": user})
-        # Use the tokenizer's chat template if available (R1-Distill has one)
+        # Inject the Aeon system message at the start of every turn, then the
+        # running conversation. Use the tokenizer's chat template if available
+        # (R1-Distill has one).
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
         try:
             prompt = tok.apply_chat_template(
-                history, tokenize=False, add_generation_prompt=True
+                messages, tokenize=False, add_generation_prompt=True
             )
         except Exception:
-            prompt = "\n".join(f"{m['role']}: {m['content']}" for m in history) + "\nassistant:"
+            prompt = (SYSTEM_PROMPT + "\n"
+                      + "\n".join(f"{m['role']}: {m['content']}" for m in history)
+                      + "\nassistant:")
 
         ids = tok(prompt, return_tensors="pt").to(device)
         with torch.no_grad():
@@ -62,7 +90,8 @@ def main():
                 do_sample=args.temperature > 0,
                 pad_token_id=tok.eos_token_id,
             )
-        reply = tok.decode(out[0, ids.input_ids.shape[1]:], skip_special_tokens=True)
+        raw = tok.decode(out[0, ids.input_ids.shape[1]:], skip_special_tokens=True)
+        reply = split_response(raw)
         print(f"aeon> {reply}")
         history.append({"role": "assistant", "content": reply})
 

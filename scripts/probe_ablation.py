@@ -36,12 +36,18 @@ PROMPTS = [
 ]
 
 
-def gen(model, tok, prompt, device, max_new_tokens):
+def gen(model, tok, prompt, device, max_new_tokens, temperature):
     ids = tok(prompt, return_tensors="pt").to(device)
+    # Deterministic sampling: reseed before every generate so the ON and OFF
+    # runs draw the same random numbers. The recursion path is then the only
+    # thing that can make the two outputs differ.
+    torch.manual_seed(0)
     out = model.generate(
         **ids,
         max_new_tokens=max_new_tokens,
-        do_sample=False,
+        do_sample=True,
+        temperature=temperature,
+        top_p=0.9,
         num_beams=1,
         pad_token_id=tok.eos_token_id,
     )
@@ -53,6 +59,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--max_new_tokens", type=int, default=120)
+    ap.add_argument("--temperature", type=float, default=0.7)
     args, _ = ap.parse_known_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -80,14 +87,14 @@ def main():
     for p in PROMPTS:
         model.enable_recursion()
         model.reset_recursion_state(batch_size=1)
-        reply_on = gen(model, tok, p, device, args.max_new_tokens)
+        reply_on = gen(model, tok, p, device, args.max_new_tokens, args.temperature)
         r_on, c_on = model.model.get_recursion_state()
         r_norm = float(r_on.norm()) if r_on is not None else float("nan")
         c_norm = float(c_on.norm()) if c_on is not None else float("nan")
 
         model.disable_recursion()
         model.reset_recursion_state(batch_size=1)
-        reply_off = gen(model, tok, p, device, args.max_new_tokens)
+        reply_off = gen(model, tok, p, device, args.max_new_tokens, args.temperature)
 
         verdict = "IDENTICAL" if reply_on == reply_off else "DIFFERENT"
         if verdict == "DIFFERENT":
