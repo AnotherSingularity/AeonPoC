@@ -31,7 +31,10 @@ def send_telegram(text: str, timeout: float = 10.0) -> bool:
     data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
     try:
         with urllib.request.urlopen(url, data=data, timeout=timeout) as resp:
-            return getattr(resp, "status", resp.getcode()) == 200
+            status = getattr(resp, "status", None)
+            if status is None:
+                status = resp.getcode()
+            return status == 200
     except Exception as e:  # noqa: BLE001 - telemetry must never crash training
         print(f"[telegram] send failed: {e}")
         return False

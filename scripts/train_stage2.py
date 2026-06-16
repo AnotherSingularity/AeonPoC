@@ -174,7 +174,10 @@ def save_checkpoint(out_dir, step, model, tok, opt, sched, sampler, args, mean_g
 
 
 def restore_training_state(resume_dir, opt, sched, sampler):
-    state = torch.load(os.path.join(resume_dir, "training_state.pt"), map_location="cpu")
+    # weights_only=False: this is our own training-state pickle (optimizer,
+    # sampler, RNG, numpy state), not an untrusted tensor file.
+    state = torch.load(os.path.join(resume_dir, "training_state.pt"),
+                       map_location="cpu", weights_only=False)
     opt.load_state_dict(state["optimizer"])
     sched.load_state_dict(state["scheduler"])
     sampler.load_state(state["sampler"])
