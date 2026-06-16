@@ -81,7 +81,15 @@ Length curriculum over 60,000 training steps, three phases:
 |-------|-------|--------|--------------------------|
 | Phase 1 (warm-up) | 0 - 15,000 | n_tokens ≤ 768 | up to 768 |
 | Phase 2 (medium) | 15,000 - 35,000 | n_tokens 512 - 1536 | up to 1536 |
-| Phase 3 (long) | 35,000 - 60,000 | n_tokens 1024 - 4096 | up to 2048 (truncate longer) |
+| Phase 3 (long) | 35,000 - 60,000 | n_tokens 1024 - 1536 | up to 1536 (truncate longer) |
+
+> **Addendum (3090 VRAM cap, 2026-06-16):** Phase 3 was capped at **1536** tokens
+> (filter narrowed from 1024-4096 to 1024-1536, truncation at 1536) instead of
+> 2048. Backprop through the per-token recursion loop scales with sequence
+> length, and 2048 risks OOM on a 24 GB 3090. A pre-launch smoke test confirms
+> VRAM headroom before the long run; if 1536 is still tight, fall back to 1280
+> then 1024. Reflected in `scripts/train_stage2.py` (`PHASE_FILTERS`,
+> `PHASE_BUDGET`, default `--max_seq_len 1536`).
 
 Phase transitions are hard cutoffs. At step 15,001 the data loader switches to the Phase 2 filter and reshuffles.
 
@@ -103,7 +111,7 @@ Aggregate score across the 20 probes is logged. This is the primary Bar 2 eviden
 ```python
 # scripts/train_stage2.py defaults
 batch_size            = 1
-max_seq_len           = 2048   # truncate Phase 3 examples to this
+max_seq_len           = 1536   # 3090 VRAM cap (was 2048); see Addendum in 2.2
 gradient_accumulation = 4      # effective batch = 4
 lr_recursion          = 5e-5   # lower than Stage 1's 1e-4 since training is much longer
 lr_backbone           = 0      # frozen

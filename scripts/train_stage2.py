@@ -45,8 +45,11 @@ from scripts.eval_stage2_ablation import run_ablation, PROBES
 # 60k schedule these give 15k / 35k; for Option Y (30k) they give 7500 / 17500,
 # matching the 7500 / 10000 / 12500 phase budgets.
 PHASE_BOUNDARY_FRACS = (15 / 60, 35 / 60)
-PHASE_FILTERS = {1: (0, 768), 2: (512, 1536), 3: (1024, 4096)}
-PHASE_BUDGET = {1: 768, 2: 1536, 3: 2048}      # effective seq_len budget per phase
+# Phase 3 is capped at 1536 tokens (not 4096/2048) to fit a 3090's 24 GB:
+# backprop through the per-token loop scales with sequence length. The Phase 3
+# token window is narrowed to 1024-1536 to match.
+PHASE_FILTERS = {1: (0, 768), 2: (512, 1536), 3: (1024, 1536)}
+PHASE_BUDGET = {1: 768, 2: 1536, 3: 1536}      # effective seq_len budget per phase
 PHASE_NAMES = {1: "warm-up", 2: "medium", 3: "long"}
 
 
@@ -246,7 +249,7 @@ def parse_args():
     ap.add_argument("--steps", type=int, default=30000)        # Option Y default
     ap.add_argument("--batch_size", type=int, default=1)
     ap.add_argument("--grad_accum", type=int, default=4)
-    ap.add_argument("--max_seq_len", type=int, default=2048)
+    ap.add_argument("--max_seq_len", type=int, default=1536)   # 3090 VRAM cap
     ap.add_argument("--lr_recursion", type=float, default=5e-5)
     ap.add_argument("--lr_backbone", type=float, default=0.0)  # frozen; informational
     ap.add_argument("--warmup_steps", type=int, default=1000)
