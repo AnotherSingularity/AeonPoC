@@ -18,7 +18,7 @@ A small, efficient language model.
 
 ## Model details
 
-- **Developed by:** <TODO>
+- **Developed by:** Dylan Scott (Horizon Technologies)
 - **Model type:** Causal language model
 - **Parameters:** <TODO>
 - **Languages:** <TODO>
@@ -57,4 +57,5 @@ tok = AutoTokenizer.from_pretrained("<checkpoint>")
 
 ## Citation
 
-See `CITATION.cff`.
+Aeon, by Dylan Scott (Horizon Technologies). See `CITATION.cff` for machine-readable
+citation metadata.

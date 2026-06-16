@@ -6,8 +6,9 @@ type: software
 version: "0.2.0-dev"
 date-released: "2026-06-16"
 authors:
-  - family-names: "<TODO>"
-    given-names: "<TODO>"
+  - family-names: "Scott"
+    given-names: "Dylan"
+    affiliation: "Horizon Technologies"
 # repository-code: "<TODO: public repository URL>"
 # license: "<TODO: finalized license SPDX id>"
 keywords:
